@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Telemetry Bridge — Live</title>
+<style>
+  :root{--bg:#0b0f14;--panel:#121822;--line:#1f2a38;--tx:#e6edf5;--mut:#7f93ab;
+        --teal:#26c6da;--green:#3ccf8e;--amber:#ffb340;--red:#ff5c6c;--blue:#5aa9ff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;background:
+       radial-gradient(1200px 600px at 50% -10%,#16202e 0%,var(--bg) 60%);color:var(--tx)}
+  header{display:flex;align-items:center;gap:14px;padding:18px 24px}
+  header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
+  header .sub{color:var(--mut)}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red)}
+  .dot.on{background:var(--green);box-shadow:0 0 10px var(--green)}
+  .wrap{max-width:1100px;margin:0 auto;padding:0 24px 32px}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+  .card{background:linear-gradient(180deg,var(--panel),#0f1620);border:1px solid var(--line);
+        border-radius:14px;padding:16px}
+  .card h2{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}
+  .big{font-size:44px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
+  .unit{color:var(--mut);font-size:14px;font-weight:600;margin-left:6px}
+  .row{display:flex;align-items:baseline;gap:6px}
+  .span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span12{grid-column:span 12}
+  canvas{width:100%;display:block}
+  .bars{display:flex;gap:18px;align-items:flex-end;height:120px}
+  .bar{flex:1;position:relative;background:#0c141d;border-radius:8px;overflow:hidden;height:100%}
+  .bar i{position:absolute;left:0;right:0;bottom:0;border-radius:8px 8px 0 0}
+  .bar span{position:absolute;top:6px;left:0;right:0;text-align:center;color:var(--mut);font-size:11px}
+  .kv{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border:0}.kv b{font-variant-numeric:tabular-nums}
+  footer{color:var(--mut);text-align:center;padding:16px}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Telemetry Bridge</h1>
+  <span class="sub" id="status">connecting…</span>
+  <span class="sub" style="margin-left:auto" id="rate">— Hz</span>
+</header>
+
+<div class="wrap">
+  <div class="grid">
+    <div class="card span6"><h2>Speed</h2>
+      <canvas id="speedGauge" height="220"></canvas></div>
+
+    <div class="card span6">
+      <h2>RPM</h2>
+      <canvas id="rpm" height="60"></canvas>
+      <div style="height:14px"></div>
+      <div class="grid" style="gap:12px">
+        <div class="span4"><h2>Gear</h2><div class="big" id="gear">—</div></div>
+        <div class="span4"><h2>Lap</h2><div class="big" id="lap">—</div></div>
+        <div class="span4"><h2>Lap time</h2><div class="big" id="laptime" style="font-size:30px">—</div></div>
+      </div>
+    </div>
+
+    <div class="card span4"><h2>Inputs</h2>
+      <div class="bars">
+        <div class="bar"><i id="thr" style="background:linear-gradient(0deg,#2e8b57,var(--green))"></i><span>THR</span></div>
+        <div class="bar"><i id="brk" style="background:linear-gradient(0deg,#8b2e34,var(--red))"></i><span>BRK</span></div>
+      </div>
+    </div>
+
+    <div class="card span4"><h2>Steering</h2>
+      <canvas id="steer" height="120"></canvas></div>
+
+    <div class="card span4"><h2>Session</h2>
+      <div class="kv"><span>Frames</span><b id="frames">0</b></div>
+      <div class="kv"><span>Rate</span><b id="hz">— Hz</b></div>
+      <div class="kv"><span>Latency</span><b id="lat">— ms</b></div>
+      <div class="kv"><span>Source</span><b>ws://127.0.0.1:8765</b></div>
+    </div>
+
+    <div class="card span12"><h2>Speed — last ~10 s</h2>
+      <canvas id="chart" height="180"></canvas></div>
+  </div>
+  <footer>Live WebSocket feed · full-rate log to Parquet · <a style="color:var(--teal)" href="https://github.com/Vikinges/DemoPychon">DemoPychon</a></footer>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let last=null, frames=0, tickTimes=[], lastMsg=performance.now();
+
+function connect(){
+  const ws=new WebSocket("ws://127.0.0.1:8765");
+  ws.onopen =()=>{$("dot").classList.add("on");$("status").textContent="live";};
+  ws.onclose=()=>{$("dot").classList.remove("on");$("status").textContent="reconnecting…";setTimeout(connect,800);};
+  ws.onmessage=e=>{
+    last=JSON.parse(e.data); frames++;
+    const now=performance.now(); tickTimes.push(now);
+    if(tickTimes.length>90)tickTimes.shift();
+    $("lat").textContent=(now-lastMsg).toFixed(1)+" ms"; lastMsg=now;
+    push(last.speed_kmh);
+  };
+}
+connect();
+
+// rolling chart buffer
+const buf=new Array(600).fill(null);
+function push(v){buf.push(v);buf.shift();}
+
+function dpi(c){const r=c.getBoundingClientRect();const d=window.devicePixelRatio||1;
+  c.width=r.width*d;c.height=c.height*d;const x=c.getContext("2d");x.scale(d,d);return[x,r.width,c.height/d];}
+
+function draw(){
+  requestAnimationFrame(draw);
+  if(!last){return;}
+  // rate
+  if(tickTimes.length>2){const dt=(tickTimes[tickTimes.length-1]-tickTimes[0])/1000;
+    const hz=(tickTimes.length-1)/dt; $("rate").textContent=hz.toFixed(0)+" Hz";$("hz").textContent=hz.toFixed(0)+" Hz";}
+  $("frames").textContent=frames;
+  $("gear").textContent=last.gear;
+  $("lap").textContent=last.lap;
+  $("laptime").textContent=last.lap_time.toFixed(2)+"s";
+  $("thr").style.height=(last.throttle*100)+"%";
+  $("brk").style.height=(last.brake*100)+"%";
+
+  // speed gauge
+  {const c=$("speedGauge");const[x,w,h]=dpi(c);c.width=c.width; // reset scaling
+   const g=c.getContext("2d");const d=window.devicePixelRatio||1;g.scale(d,d);
+   const cx=w/2,cy=h-14,R=Math.min(w/2,h)-16,a0=Math.PI*0.85,a1=Math.PI*0.15+Math.PI*2*0+Math.PI;
+   const s0=Math.PI*0.8,s1=Math.PI*2.2,frac=Math.min(1,last.speed_kmh/320);
+   g.lineWidth=16;g.strokeStyle="#182230";g.beginPath();g.arc(cx,cy,R,s0,s1);g.stroke();
+   const grad=g.createLinearGradient(0,0,w,0);grad.addColorStop(0,"#26c6da");grad.addColorStop(1,"#5aa9ff");
+   g.strokeStyle=grad;g.beginPath();g.arc(cx,cy,R,s0,s0+(s1-s0)*frac);g.stroke();
+   g.fillStyle="#e6edf5";g.textAlign="center";g.font="800 42px sans-serif";
+   g.fillText(Math.round(last.speed_kmh),cx,cy-6);
+   g.fillStyle="#7f93ab";g.font="600 13px sans-serif";g.fillText("km/h",cx,cy+14);}
+
+  // rpm bar with redline
+  {const c=$("rpm");const g=c.getContext("2d");const d=window.devicePixelRatio||1;
+   const r=c.getBoundingClientRect();c.width=r.width*d;c.height=60*d;g.scale(d,d);
+   const w=r.width,h=60,frac=Math.min(1,last.rpm/12000),red=0.82;
+   g.fillStyle="#0c141d";g.fillRect(0,18,w,24);
+   g.fillStyle=frac>red?"#ff5c6c":"#3ccf8e";g.fillRect(0,18,w*frac,24);
+   g.fillStyle="#ff5c6c";g.fillRect(w*red-1,14,2,32);
+   g.fillStyle="#7f93ab";g.font="600 12px sans-serif";g.textAlign="left";
+   g.fillText(Math.round(last.rpm)+" rpm",0,12);}
+
+  // steering
+  {const c=$("steer");const g=c.getContext("2d");const d=window.devicePixelRatio||1;
+   const r=c.getBoundingClientRect();c.width=r.width*d;c.height=120*d;g.scale(d,d);
+   const w=r.width,h=120,cx=w/2,cy=h/2,R=42,ang=last.steering*Math.PI*0.6;
+   g.strokeStyle="#26c6da";g.lineWidth=6;g.beginPath();g.arc(cx,cy,R,0,Math.PI*2);g.stroke();
+   g.strokeStyle="#e6edf5";g.lineWidth=4;g.beginPath();g.moveTo(cx,cy);
+   g.lineTo(cx+Math.sin(ang)*R,cy-Math.cos(ang)*R);g.stroke();
+   g.fillStyle="#7f93ab";g.font="600 12px sans-serif";g.textAlign="center";
+   g.fillText((last.steering>=0?"+":"")+last.steering.toFixed(2),cx,cy+62);}
+
+  // chart
+  {const c=$("chart");const g=c.getContext("2d");const d=window.devicePixelRatio||1;
+   const r=c.getBoundingClientRect();c.width=r.width*d;c.height=180*d;g.scale(d,d);
+   const w=r.width,h=180,pad=8,max=320;
+   g.clearRect(0,0,w,h);g.strokeStyle="#1f2a38";g.lineWidth=1;
+   for(let i=0;i<=4;i++){const y=pad+(h-2*pad)*i/4;g.beginPath();g.moveTo(0,y);g.lineTo(w,y);g.stroke();}
+   g.strokeStyle="#26c6da";g.lineWidth=2;g.beginPath();let started=false;
+   for(let i=0;i<buf.length;i++){const v=buf[i];if(v==null)continue;
+     const x=w*i/buf.length,y=pad+(h-2*pad)*(1-Math.min(1,v/max));
+     if(!started){g.moveTo(x,y);started=true;}else g.lineTo(x,y);}
+   g.stroke();}
+}
+draw();
+</script>
+</body>
+</html>

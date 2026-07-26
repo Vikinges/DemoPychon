@@ -1,4 +1,3 @@
-"""A single telemetry sample."""
 from __future__ import annotations
 
 import time
@@ -8,21 +7,18 @@ from typing import Any, Dict
 
 @dataclass(slots=True)
 class TelemetryFrame:
-    """One telemetry sample from the car/sim at a single instant.
+    """One telemetry sample. Same shape whether it comes from a sim's shared
+    memory or a CAN/serial adapter."""
 
-    Field set mirrors what a sim-racing shared-memory feed exposes; a real
-    adapter (iRacing, AC/ACC, or a CAN/serial bridge) would fill the same shape.
-    """
-
-    t: float              # monotonic-ish timestamp, seconds
-    lap: int              # current lap number
-    lap_time: float       # seconds into the current lap
+    t: float
+    lap: int
+    lap_time: float
     speed_kmh: float
     rpm: float
-    gear: int             # -1 = reverse, 0 = neutral, 1..n
-    throttle: float       # 0.0 .. 1.0
-    brake: float          # 0.0 .. 1.0
-    steering: float       # -1.0 (full left) .. 1.0 (full right)
+    gear: int
+    throttle: float      # 0..1
+    brake: float         # 0..1
+    steering: float      # -1 left .. 1 right
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

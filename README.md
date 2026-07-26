@@ -1,68 +1,69 @@
-# telemetry-bridge-demo
+# telemetry-bridge
 
-A small, self-contained **async telemetry bridge** in Python: take a real-time
-telemetry stream and fan it out to **two sinks at two different rates** —
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-- a **WebSocket** feed capped at a display rate (default **60 Hz**) for a live UI, and
-- a **Parquet** log that captures **every** frame at the full source rate (default 360 Hz)
+Real-time telemetry, split into two streams at two rates off a single async core:
 
-— without either sink blocking the other. The data source here is a **mock
-sim-racing generator** (speed, rpm, gear, throttle, brake, steering, lap time),
-so the whole pipeline runs with **no game or hardware attached**.
+- a **WebSocket** feed capped at a display rate (60 Hz) for a live UI, and
+- a **Parquet** log that captures **every** frame at the full source rate (360 Hz),
 
-The point of the design is the rate split: a hard-realtime log and a
-soft-realtime UI, decoupled. A real adapter (iRacing / AC / ACC shared memory,
-or a CAN/serial bridge) would drop into `mock_source.py`'s place and feed the
-same `TelemetryFrame` shape downstream.
+with a live browser **dashboard** on top. The source here is a mock sim-racing
+generator, so it all runs with no game or hardware attached — the same pipeline
+takes a real iRacing / AC / ACC shared-memory adapter in place of the mock.
 
-## Run it
+![dashboard](docs/dashboard.png)
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
-
-# log-only, writes session.parquet
-python run_demo.py --seconds 10 --no-ws
-
-# with the live WebSocket server on ws://127.0.0.1:8765
 python run_demo.py --seconds 30
 ```
 
-Then point a browser or `websocat ws://127.0.0.1:8765` at it to watch ~60 Hz
-JSON frames while the full 360 Hz stream lands in `session.parquet`.
+Open **http://127.0.0.1:8080** — live speed/rpm gauges, throttle & brake bars,
+steering, gear, lap time and a rolling speed chart, fed over
+`ws://127.0.0.1:8765` while every frame lands in `session.parquet`.
+
+```bash
+python run_demo.py --seconds 10 --no-ws        # log only, no UI
+python run_demo.py --replay session.parquet     # replay a recording into the dashboard
+```
 
 ## Tests
 
 ```bash
-pip install -r requirements.txt
-pytest -q
+pytest -q          # 10 tests, incl. a real WebSocket client round-trip
 ```
 
-Covers the pure-function sampler (deterministic, physical channel ranges),
-the Parquet logger (all rows written, values round-trip), and the bridge
-(full-rate log vs capped broadcast, real WebSocket client receives JSON).
+`pytest -q` — 10 tests.
+
+## Why it's built this way
+
+- **Rate split.** A 360 Hz source shouldn't flood a browser; a 60 Hz UI
+  shouldn't cost you log fidelity. The log runs at full rate, the socket is
+  downsampled, and neither blocks the other.
+- **Isolated broadcaster.** A slow or dead WebSocket client is dropped, never
+  allowed to delay a logged frame.
+- **Batched Parquet.** Frames flush in row groups, so logging at hundreds of Hz
+  doesn't stall the loop; a full session stays small and re-opens instantly in
+  pandas / DuckDB.
+- **Pure sampler.** `MockTelemetrySource.sample(t)` is a pure function of time —
+  channel behaviour is unit-tested without the event loop.
 
 ## Layout
 
 ```
 src/telemetry_bridge/
-  frame.py           TelemetryFrame dataclass (one sample)
-  mock_source.py     deterministic mock source; sample(t) is pure + testable
-  parquet_logger.py  buffered, batched full-rate Parquet writer
-  ws_server.py       async WebSocket broadcaster (drops dead clients)
-  bridge.py          one source in -> Parquet (full rate) + WS (capped)
-run_demo.py          CLI entry point
+  frame.py           TelemetryFrame — one sample
+  mock_source.py     deterministic mock source (swap for a real sim adapter)
+  parquet_logger.py  batched full-rate writer + session reader
+  replay.py          re-stream a recorded session at original timing
+  ws_server.py       async WebSocket broadcaster
+  bridge.py          source -> Parquet (full) + WebSocket (capped)
+dashboard/index.html live gauges + chart (vanilla JS, no build step)
+run_demo.py          CLI
 tests/               pytest + pytest-asyncio
 ```
 
-## Design notes
-
-- **`sample(t)` is a pure function of time** — no I/O — so channel behaviour is
-  unit-tested without the event loop.
-- **Parquet writes are batched** (row groups) so logging at hundreds of Hz
-  doesn't stall the loop or thrash the disk; a full session stays small and
-  re-opens instantly in pandas / DuckDB.
-- **The broadcaster is isolated from the log**: a slow or dead WebSocket client
-  is dropped and never delays a logged frame.
-
-MIT licensed. Built as a focused demo of async real-time streaming + columnar
-logging in Python.
+MIT licensed.
